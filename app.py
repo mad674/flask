@@ -7,9 +7,11 @@ import numpy as np
 from PIL import Image
 from io import BytesIO
 import requests
+
 from flask_cors import CORS
 import traceback
-
+from dotenv import load_dotenv
+load_dotenv() 
 # Disable oneDNN optimizations
 os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
 
@@ -73,8 +75,7 @@ def predict():
         }
 
         logging.debug(f"Sending image to Node.js server for user: {data['user']}")
-
-        response = requests.post(f'http://localhost:4000/vendor/sktvendor/{data["user"]}', files=files)
+        response = requests.post(f'{os.getenv('API_URL')}/vendor/sktvendor/{data["user"]}', files=files)
 
         # Check if the response from Node.js server is successful
         if response.status_code != 200:
