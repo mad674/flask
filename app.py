@@ -1,14 +1,17 @@
 import logging
+import base64
+import os
 from flask import Flask, request, jsonify
 from tensorflow.keras.models import load_model
 import numpy as np
 from PIL import Image
-import os
-import requests  # Import requests for sending HTTP requests
+from io import BytesIO
+import requests
 from flask_cors import CORS
-import mimetypes
 import traceback
-from datetime import datetime
+
+# Disable oneDNN optimizations
+os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
 
 app = Flask(__name__)
 CORS(app)
@@ -22,33 +25,33 @@ logging.basicConfig(level=logging.DEBUG)
 # Load the pre-trained CNN model once at the start
 model = load_model('sketch_to_color_model.h5 (2).keras')
 
-def is_image_file(filename):
-    mime_type, _ = mimetypes.guess_type(filename)
-    return mime_type and mime_type.startswith('image')
-
 @app.route('/predict', methods=['POST'])
 def predict():
     try:
         logging.debug("Received request for prediction.")
-        # Ensure an image file was sent in the request
-        if 'image' not in request.files:
-            logging.error('No image file provided.')
-            return jsonify({'error': 'No image file provided'}), 400
-        file = request.files['image']
-        if file.filename == '':
-            logging.error('No selected file.')
-            return jsonify({'error': 'No selected file'}), 400
+        
+        # Decode Base64 image if sent via JSON
+        data = request.get_json()
+        if 'image' not in data:
+            return jsonify({"error": "No image data provided"}), 400
+        
+        # Extract image URL from the JSON structure
+        image_data = data['image']['_streams'][1]  # Adjust according to your structure
+        a = image_data.split('uploads/')[1]
+        p = a
+        a = a[len(a)-(len(a)-a.find('.'))+1:].upper()
+        if a == 'JPG':
+            a = 'JPEG'
+            p=p.replace('JPG','JPEG')
+        
+        # Fetch the image from the local server
+        response = requests.get(image_data)
+        img = Image.open(BytesIO(response.content)).convert('RGB')  # Ensure it's in RGB format
 
-        if not is_image_file(file.filename):
-            logging.error('Uploaded file is not an image.')
-            return jsonify({'error': 'Uploaded file is not an image'}), 400
-
-        # Open the image file and preprocess it
-        with Image.open(file) as img:
-            img = img.convert('RGB')  # Ensure it's RGB
-            img = img.resize((256, 256))  # Resize image for the model
-            image = np.array(img) / 255.0  # Normalize the image
-            image = np.expand_dims(image, axis=0)  # Add batch dimension
+        # Preprocess the image for the model
+        img = img.resize((256, 256))  # Resize image for the model
+        image = np.array(img) / 255.0  # Normalize the image
+        image = np.expand_dims(image, axis=0)  # Add batch dimension
 
         # Make the prediction
         prediction = model.predict(image)
@@ -57,23 +60,33 @@ def predict():
         predicted_image = (prediction[0] * 255).astype(np.uint8)
         output_image = Image.fromarray(predicted_image)
 
-        # Save the output image to a temporary file
-        temp_output_path = 'output/' +file.filename
-        output_image.save(temp_output_path)
+        # Save the predicted image in memory (without writing to disk)
+        image_io = BytesIO()
+        output_image.save(image_io, format=a)  # Save as JPEG or other format
+        image_io.seek(0)  # Move to the beginning of the BytesIO buffer
 
-        # Send the image to the server running on localhost:4000
-        with open(temp_output_path, 'rb') as img_file:
-            response = requests.post('http://localhost:4000/save_image', files={'image': img_file})
-            if response.status_code != 200:
-                logging.error('Failed to save image on localhost:4000: %s', response.text)
-                return jsonify({'error': 'Failed to save image on server'}), 500
+        # Send the image to the Node.js server
+        files = {
+            'images': (f'{p}', image_io, f'image/{a.lower()}'),
+            'name': (None, data['user']),
+            'filename': (None, f'{p}'),
+        }
 
-        logging.debug('Image successfully saved on localhost:4000')
-        return jsonify({'message': 'Image successfully saved on localhost:4000', 'filename':temp_output_path}), 200
+        logging.debug(f"Sending image to Node.js server for user: {data['user']}")
 
+        response = requests.post(f'http://localhost:4000/vendor/sktvendor/{data["user"]}', files=files)
+
+        # Check if the response from Node.js server is successful
+        if response.status_code != 200:
+            logging.error(f"Failed to upload image to Node.js server, status code: {response.status_code}")
+            return jsonify({'error': 'Failed to upload image to Node.js server'}), 500
+
+        logging.debug('Image successfully processed and sent to Node.js server')
+        return jsonify({'message': 'Image processed successfully', 'node_response': response.json()}), 200
+    
     except Exception as e:
         logging.error("Error processing the image: %s", str(e))
-        logging.debug(traceback.format_exc())  # Print the traceback for debugging
+        logging.debug(traceback.format_exc())
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
