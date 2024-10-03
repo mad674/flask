@@ -49,7 +49,6 @@ def predict():
         # Fetch the image from the local server
         response = requests.get(image_data)
         img = Image.open(BytesIO(response.content)).convert('RGB')  # Ensure it's in RGB format
-
         # Preprocess the image for the model
         img = img.resize((256, 256))  # Resize image for the model
         image = np.array(img) / 255.0  # Normalize the image
@@ -75,7 +74,7 @@ def predict():
         }
 
         logging.debug(f"Sending image to Node.js server for user: {data['user']}")
-        response = requests.post(f'{os.getenv('API_URL')}/vendor/sktvendor/{data["user"]}', files=files)
+        response = requests.post(f'https://backend-9oaz.onrender.com/vendor/sktvendor/{data["user"]}', files=files)
 
         # Check if the response from Node.js server is successful
         if response.status_code != 200:
